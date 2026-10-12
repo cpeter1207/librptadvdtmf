@@ -18,15 +18,17 @@ int main(void) {
   assert(api->create && api->destroy && api->set_muting && api->suppressing &&
          api->process);
 
-  struct rptadv_dtmf *detector = api->create(true);
+  assert(api->create(1, NULL) == -1);
+  struct rptadv_dtmf *detector = NULL;
+  assert(api->create(2, &detector) == 0);
   assert(detector);
   float audio[1] = {0.25f};
   uint8_t digit = 0;
-  api->process(detector, true, audio, 1, capture, &digit);
+  api->process(detector, 2, audio, 1, capture, &digit);
   assert(audio[0] == 0.25f && digit == 0);
-  api->process(detector, false, NULL, 0, capture, &digit);
-  assert(!api->suppressing(detector));
-  api->set_muting(detector, false);
+  api->process(detector, 0, NULL, 0, capture, &digit);
+  assert(api->suppressing(detector) == 0);
+  api->set_muting(detector, 0);
   api->destroy(detector);
   api->destroy(NULL);
   return 0;

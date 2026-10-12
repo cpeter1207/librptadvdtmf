@@ -23,13 +23,13 @@ pub struct DtmfDescriptor {
     struct_size: u32,
     abi_version: u32,
     capability_name: *const c_char,
-    create: extern "C" fn(bool) -> *mut DtmfHandle,
+    create: unsafe extern "C" fn(u32, *mut *mut DtmfHandle) -> i32,
     destroy: unsafe extern "C" fn(*mut DtmfHandle),
-    set_muting: unsafe extern "C" fn(*mut DtmfHandle, bool),
-    suppressing: unsafe extern "C" fn(*const DtmfHandle) -> bool,
+    set_muting: unsafe extern "C" fn(*mut DtmfHandle, u32),
+    suppressing: unsafe extern "C" fn(*const DtmfHandle) -> u32,
     process: unsafe extern "C" fn(
         *mut DtmfHandle,
-        bool,
+        u32,
         *mut f32,
         u32,
         Option<extern "C" fn(*mut c_void, u8)>,
@@ -57,8 +57,12 @@ pub extern "C" fn rptadv_dtmf_descriptor() -> *const DtmfDescriptor {
     &DESCRIPTOR
 }
 
-extern "C" fn create(muting: bool) -> *mut DtmfHandle {
-    Box::into_raw(Box::new(DtmfHandle(DtmfDetector::new(muting))))
+unsafe extern "C" fn create(muting: u32, out: *mut *mut DtmfHandle) -> i32 {
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        return -1;
+    };
+    *out = Box::into_raw(Box::new(DtmfHandle(DtmfDetector::new(muting != 0))));
+    0
 }
 
 unsafe extern "C" fn destroy(handle: *mut DtmfHandle) {
@@ -68,21 +72,21 @@ unsafe extern "C" fn destroy(handle: *mut DtmfHandle) {
     }
 }
 
-unsafe extern "C" fn set_muting(handle: *mut DtmfHandle, enabled: bool) {
+unsafe extern "C" fn set_muting(handle: *mut DtmfHandle, enabled: u32) {
     // SAFETY: the caller holds the handle exclusively.
     if let Some(state) = unsafe { handle.as_mut() } {
-        state.0.set_muting(enabled);
+        state.0.set_muting(enabled != 0);
     }
 }
 
-unsafe extern "C" fn suppressing(handle: *const DtmfHandle) -> bool {
+unsafe extern "C" fn suppressing(handle: *const DtmfHandle) -> u32 {
     // SAFETY: the caller holds the handle for this call.
-    unsafe { handle.as_ref() }.is_some_and(|state| state.0.suppressing())
+    u32::from(unsafe { handle.as_ref() }.is_some_and(|state| state.0.suppressing()))
 }
 
 unsafe extern "C" fn process(
     handle: *mut DtmfHandle,
-    receiving: bool,
+    receiving: u32,
     audio: *mut f32,
     count: u32,
     emit: Option<extern "C" fn(*mut c_void, u8)>,
@@ -102,7 +106,7 @@ unsafe extern "C" fn process(
         // SAFETY: the non-null pointer names count writable f32 samples.
         unsafe { std::slice::from_raw_parts_mut(audio, count as usize) }
     };
-    state.0.process(receiving, samples, |digit| {
+    state.0.process(receiving != 0, samples, |digit| {
         if let Some(callback) = emit {
             callback(context, ascii(digit));
         }
@@ -136,6 +140,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn descriptor_create_uses_u32_flags_and_status_out_handle() {
+        let api = unsafe { &*rptadv_dtmf_descriptor() };
+        let create: unsafe extern "C" fn(u32, *mut *mut DtmfHandle) -> i32 = api.create;
+        let mut detector = std::ptr::null_mut();
+        assert_eq!(unsafe { create(2, &mut detector) }, 0);
+        assert!(!detector.is_null());
+        assert_eq!(unsafe { create(0, std::ptr::null_mut()) }, -1);
+        unsafe { (api.destroy)(detector) };
+    }
+
+    #[test]
     fn descriptor_exposes_borrowed_ascii_events_and_muted_pcm() {
         let api = unsafe { rptadv_dtmf_descriptor().as_ref() }.expect("descriptor");
         assert_eq!(api.abi_version, 1);
@@ -144,7 +159,8 @@ mod tests {
             unsafe { std::ffi::CStr::from_ptr(api.capability_name) }.to_bytes(),
             b"rptadv.dtmf"
         );
-        let detector = (api.create)(true);
+        let mut detector = std::ptr::null_mut();
+        assert_eq!(unsafe { (api.create)(2, &mut detector) }, 0);
         assert!(!detector.is_null());
         let mut digits = Vec::<u8>::new();
         extern "C" fn capture(context: *mut c_void, digit: u8) {
@@ -162,17 +178,21 @@ mod tests {
         unsafe {
             (api.process)(
                 detector,
-                true,
+                2,
                 tone.as_mut_ptr(),
                 tone.len() as u32,
                 Some(capture),
                 (&mut digits as *mut Vec<u8>).cast(),
             );
-            assert!((api.suppressing)(detector));
+            assert_eq!((api.suppressing)(detector), 1);
             assert!(tone[2 * 612..].iter().all(|sample| *sample == 0.0));
+            (api.set_muting)(detector, 0);
+            assert_eq!((api.suppressing)(detector), 0);
+            (api.set_muting)(detector, 2);
+            assert_eq!((api.suppressing)(detector), 1);
             (api.process)(
                 detector,
-                false,
+                0,
                 std::ptr::null_mut(),
                 0,
                 Some(capture),
