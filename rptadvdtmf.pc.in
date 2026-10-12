@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+libdir=@LIBDIR@
+includedir=${prefix}/include
+abi_version=@ABI_VERSION@
+
+Name: librptadvdtmf
+Description: Portable 48 kHz DTMF detection ABI for rpt_advanced
+Version: @VERSION@
+Libs: -L${libdir} -lrptadvdtmf
+Cflags: -I${includedir}

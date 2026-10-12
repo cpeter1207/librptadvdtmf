@@ -1,0 +1,3 @@
+usr/include/rptadvdtmf/rptadvdtmf.h
+usr/lib/*/librptadvdtmf.so
+usr/lib/*/pkgconfig/rptadvdtmf.pc
