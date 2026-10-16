@@ -1,18 +1,34 @@
 # librptadvdtmf
 
-Portable fixed-state 48 kHz DTMF detector extracted from `rpt_advanced` core
-commit `c63db09`. Its ABI 1 descriptor processes arbitrary F32 partitions in
-place, reports completed standard digits through a borrowed ASCII callback,
-and accepts zero-length carrier-loss calls. Detector handles are allocated
-before audio starts; `process` neither allocates nor blocks.
-The C ABI uses 32-bit zero/nonzero flags and status-plus-output-handle creation
-(`0` success, `-1` for a null output pointer).
+Portable DTMF detection and generation for 48 kHz mono F32 audio. The library
+supports all 16 digits: `0`–`9`, `A`–`D`, `*`, and `#`. It has no radio hardware
+or Asterisk dependency.
 
-The detector preserves the controller's 612-sample analysis interval,
-qualification, release, and muting behavior. Command collection, authorization,
-and DTMF generation remain outside this initial provider release.
+Use `rptadv_dtmf_descriptor()` from `rptadvdtmf/rptadvdtmf.h`. Check the
+descriptor identity, ABI version and size before using its functions.
+
+The detector accepts audio in arbitrary-sized blocks and reports completed
+digits through an ASCII callback. It can mute qualified tones. Pass a zero
+receive flag when carrier drops, even when no samples are available.
+
+The generator produces one digit followed by silence. Set the tone and silence
+lengths from 1 through 1000 ms each. Set the combined peak level from -60
+through 0 dBFS. Both tone components have equal levels. Render into successive
+output buffers until a nonempty buffer receives zero samples. The returned
+sample count includes the trailing silence.
+
+Create and destroy handles outside the audio callback. Processing and rendering
+do not allocate or block. The generator dynamically uses `librptadvtone.so.1`.
+Command collection and authorization belong to the calling application.
+
+## Build and check
+
+Install the Rust toolchain, a C compiler, pkg-config and `librptadvtone-dev`.
+Run `make` to build the shared library, then `make test`. Use `make install`
+with `PREFIX` and `DESTDIR` as needed. Link applications with the flags from
+`pkg-config --cflags --libs rptadvdtmf`.
 
 `make quality` runs portable source and documentation checks. `make test`
-checks the Rust detector and C descriptor. `make coverage` audits production
+checks the detector, generator and C descriptor. `make coverage` audits production
 line and branch coverage on native Debian 13 amd64. `make platform-verify`
 checks staged installation, package artifacts, and source distribution.
