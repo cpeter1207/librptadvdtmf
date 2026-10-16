@@ -36,3 +36,31 @@ impl DtmfGenerator {
         self.0.render(output)
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generator_descriptor_reports_provider_failure_without_written_samples() {
+        let api = unsafe { &*crate::rptadv_dtmf_descriptor() };
+        for sequence in crate::tone_client::tests::failing_sequences() {
+            let mut handle = crate::DtmfGeneratorHandle(DtmfGenerator(sequence));
+            let mut output = [0.0; 1];
+            let mut written = usize::MAX;
+            assert_eq!(
+                unsafe {
+                    (api.generator_render)(
+                        &mut handle,
+                        output.as_mut_ptr(),
+                        output.len(),
+                        &mut written,
+                    )
+                },
+                -1
+            );
+            assert_eq!(written, 0);
+        }
+    }
+}

@@ -108,7 +108,7 @@ impl Drop for Sequence {
 
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -159,6 +159,14 @@ mod tests {
         0
     }
 
+    pub(crate) fn failing_sequences() -> [Sequence; 2] {
+        [failed_render as Render, oversized_render].map(|render| {
+            let mut sequence = Sequence::new("697+1209/1,silence/1", -12).unwrap();
+            sequence.render = render;
+            sequence
+        })
+    }
+
     #[test]
     fn generator_tone_provider_failures_are_reported() {
         unsafe {
@@ -166,9 +174,7 @@ mod tests {
             api.create = Some(empty_create);
             assert!(Sequence::from_descriptor(&api.prefix, "1/1", 0).is_err());
         }
-        for render in [failed_render as Render, oversized_render] {
-            let mut sequence = Sequence::new("697+1209/1,silence/1", -12).unwrap();
-            sequence.render = render;
+        for mut sequence in failing_sequences() {
             assert_eq!(sequence.render(&mut [0.0; 1]), Err(GeneratorError));
         }
     }
