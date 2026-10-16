@@ -1,10 +1,11 @@
 /** @file
- * @brief Fixed-state 48 kHz DTMF detection descriptor ABI.
+ * @brief 48 kHz DTMF detection and finite PCM generation descriptor ABI.
  */
 #ifndef RPTADV_DTMF_H
 #define RPTADV_DTMF_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,6 +15,8 @@ extern "C" {
 
 /** @brief Opaque state for one 48 kHz receive stream. */
 struct rptadv_dtmf;
+/** @brief Owned finite tone and following silence; create and destroy off audio. */
+struct rptadv_dtmf_generator;
 
 /** @brief Completed digit callback; context is borrowed only during process. */
 typedef void (*rptadv_dtmf_emit_fn)(void *context, uint8_t ascii_digit);
@@ -52,6 +55,31 @@ struct rptadv_dtmf_descriptor {
    */
   void (*process)(struct rptadv_dtmf *handle, uint32_t receiving, float *audio,
                   uint32_t count, rptadv_dtmf_emit_fn emit, void *context);
+  /** @brief Allocate a finite 48 kHz mono F32 digit followed by silence.
+   * @param digit ASCII 0-9, A-D, star, or hash.
+   * @param duration_ms Tone duration, 1 through 1000 milliseconds.
+   * @param gap_ms Following silence, 1 through 1000 milliseconds.
+   * @param level_dbfs Combined peak, -60 through 0 dBFS; equal component levels.
+   * @param out Receives the owned handle; cleared on failure.
+   * @return Zero on success, -1 for invalid arguments or provider failure.
+   * @note ABI 1 extension: check struct_size before reading this tail.
+   */
+  int32_t (*generator_create)(uint8_t digit, uint32_t duration_ms,
+                             uint32_t gap_ms, int32_t level_dbfs,
+                             struct rptadv_dtmf_generator **out);
+  /** @brief Render up to capacity samples without allocation or blocking.
+   * @param handle Exclusive live generator.
+   * @param out Writable span; null permitted only for zero capacity.
+   * @param capacity Number of writable samples.
+   * @param written Receives sample count, including the trailing silence.
+   * @return Zero on success, -1 on invalid arguments or provider failure.
+   * @note Zero written means finished when capacity is nonzero. Unwritten
+   * output is untouched; oscillator phase is preserved between calls.
+   */
+  int32_t (*generator_render)(struct rptadv_dtmf_generator *handle, float *out,
+                             size_t capacity, size_t *written);
+  /** @brief Release generator after its last render; null is accepted. */
+  void (*generator_destroy)(struct rptadv_dtmf_generator *handle);
 };
 
 /** @brief Return the immutable descriptor; validate identity, size, and ABI. */

@@ -1,10 +1,10 @@
 [package]
 name = "librptadvdtmf"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-2.0-only"
-description = "Portable DTMF detection ABI for rpt_advanced"
+description = "Portable DTMF detection and generation ABI for rpt_advanced"
 repository = "https://github.com/cpeter1207/librptadvdtmf"
 publish = false
 

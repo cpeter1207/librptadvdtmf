@@ -14,7 +14,7 @@ PKG_CONFIG ?= pkg-config
 
 PACKAGE := librptadvdtmf
 CRATE := rptadvdtmf
-PACKAGE_VERSION ?= 0.1.0-alpha.1
+PACKAGE_VERSION ?= 0.1.0-alpha.2
 SOVERSION := 1
 PREFIX ?= /usr/local
 DESTDIR ?=
@@ -140,6 +140,7 @@ install-check: all
 	test -L build/stage/usr/lib/$(notdir $(LIBRARY_LINK))
 	test ! -e build/stage/usr/lib/$(LIBRARY_BASENAME).a
 	$(READELF) -d build/stage/usr/lib/$(notdir $(LIBRARY_VERSIONED)) | grep -F '$(LIBRARY_BASENAME).so.$(SOVERSION)'
+	$(READELF) -d build/stage/usr/lib/$(notdir $(LIBRARY_VERSIONED)) | grep -F 'librptadvtone.so.1'
 	! $(READELF) -d build/stage/usr/lib/$(notdir $(LIBRARY_VERSIONED)) | grep -E 'res_usbradio.so|libportaudio.so|libasound.so|libhamlib.so|libavfilter.so'
 	test -f build/stage/usr/include/rptadvdtmf/$(notdir $(HEADER))
 	test -f build/stage/usr/lib/pkgconfig/rptadvdtmf.pc
