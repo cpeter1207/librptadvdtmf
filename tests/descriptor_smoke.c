@@ -31,5 +31,17 @@ int main(void) {
   api->set_muting(detector, 0);
   api->destroy(detector);
   api->destroy(NULL);
+  assert(api->generator_create && api->generator_render && api->generator_destroy);
+  struct rptadv_dtmf_generator *generator = NULL;
+  assert(api->generator_create('5', 1, 1, -12, &generator) == 0);
+  float output[97] = {0};
+  size_t written = 0;
+  assert(api->generator_render(generator, output, 97, &written) == 0);
+  assert(written == 96 && output[1] > 0);
+  for (size_t i = 48; i < 96; ++i) {
+    assert(output[i] == 0);
+  }
+  api->generator_destroy(generator);
+  api->generator_destroy(NULL);
   return 0;
 }

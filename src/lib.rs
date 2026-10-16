@@ -1,4 +1,4 @@
-//! Portable DTMF detection state behind one versioned descriptor.
+//! Portable DTMF detection and finite generation behind one versioned descriptor.
 
 #![deny(warnings)]
 #![cfg_attr(coverage, feature(coverage_attribute))]
@@ -10,12 +10,18 @@ use std::{
 
 pub mod dtmf;
 pub use dtmf::{DtmfDetector, DtmfDigit};
+mod generator;
+mod tone_client;
+pub use generator::{DtmfGenerator, GeneratorError};
 
 const ABI_VERSION: u32 = 1;
 const CAPABILITY_NAME: &[u8] = b"rptadv.dtmf\0";
 
 /// Opaque detector state.
 pub struct DtmfHandle(DtmfDetector);
+
+/// Opaque finite generator; prepare and release it off audio.
+pub struct DtmfGeneratorHandle(DtmfGenerator);
 
 /// ABI 1 DTMF function table.
 #[repr(C)]
@@ -35,6 +41,10 @@ pub struct DtmfDescriptor {
         Option<extern "C" fn(*mut c_void, u8)>,
         *mut c_void,
     ),
+    generator_create: unsafe extern "C" fn(u8, u32, u32, i32, *mut *mut DtmfGeneratorHandle) -> i32,
+    generator_render:
+        unsafe extern "C" fn(*mut DtmfGeneratorHandle, *mut f32, usize, *mut usize) -> i32,
+    generator_destroy: unsafe extern "C" fn(*mut DtmfGeneratorHandle),
 }
 
 // SAFETY: the descriptor and every address it references are immutable.
@@ -49,6 +59,9 @@ static DESCRIPTOR: DtmfDescriptor = DtmfDescriptor {
     set_muting,
     suppressing,
     process,
+    generator_create,
+    generator_render,
+    generator_destroy,
 };
 
 /// Return the immutable ABI 1 function table.
@@ -134,6 +147,72 @@ fn ascii(digit: DtmfDigit) -> u8 {
     }
 }
 
+unsafe extern "C" fn generator_create(
+    digit: u8,
+    duration_ms: u32,
+    gap_ms: u32,
+    level_dbfs: i32,
+    out: *mut *mut DtmfGeneratorHandle,
+) -> i32 {
+    // SAFETY: caller supplies null or a writable output pointer.
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        return -1;
+    };
+    *out = std::ptr::null_mut();
+    use DtmfDigit::*;
+    let digit = [
+        One, Two, Three, A, Four, Five, Six, B, Seven, Eight, Nine, C, Star, Zero, Hash, D,
+    ]
+    .into_iter()
+    .find(|value| ascii(*value) == digit);
+    let generator = digit
+        .zip(i8::try_from(level_dbfs).ok())
+        .and_then(|(digit, level)| DtmfGenerator::new(digit, duration_ms, gap_ms, level).ok());
+    let Some(generator) = generator else {
+        return -1;
+    };
+    *out = Box::into_raw(Box::new(DtmfGeneratorHandle(generator)));
+    0
+}
+
+unsafe extern "C" fn generator_render(
+    handle: *mut DtmfGeneratorHandle,
+    output: *mut f32,
+    capacity: usize,
+    written: *mut usize,
+) -> i32 {
+    // SAFETY: caller supplies null or a writable count and exclusively owned handle.
+    let Some(written) = (unsafe { written.as_mut() }) else {
+        return -1;
+    };
+    *written = 0;
+    let Some(generator) = (unsafe { handle.as_mut() }) else {
+        return -1;
+    };
+    let samples = if capacity == 0 {
+        &mut []
+    } else if output.is_null() {
+        return -1;
+    } else {
+        // SAFETY: non-null output is writable for capacity samples by the ABI contract.
+        unsafe { std::slice::from_raw_parts_mut(output, capacity) }
+    };
+    match generator.0.render(samples) {
+        Ok(count) => {
+            *written = count;
+            0
+        }
+        Err(_) => -1,
+    }
+}
+
+unsafe extern "C" fn generator_destroy(handle: *mut DtmfGeneratorHandle) {
+    if !handle.is_null() {
+        // SAFETY: ownership returns once, after the last render operation completes.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod tests {
@@ -207,3 +286,7 @@ mod tests {
 #[cfg(test)]
 #[cfg_attr(coverage, coverage(off))]
 mod abi_tests;
+
+#[cfg(test)]
+#[cfg_attr(coverage, coverage(off))]
+mod generator_tests;

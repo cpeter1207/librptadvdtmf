@@ -1,5 +1,68 @@
 use super::*;
 
+#[test]
+fn generator_descriptor_renders_ascii_and_rejects_invalid_arguments() {
+    let api = unsafe { &*rptadv_dtmf_descriptor() };
+    for digit in b"123A456B789C*0#D" {
+        let mut handle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { (api.generator_create)(*digit, 200, 50, -12, &mut handle) },
+            0
+        );
+        let mut pcm = [2.0; 12001];
+        let mut written = usize::MAX;
+        unsafe {
+            assert_eq!(
+                (api.generator_render)(handle, pcm.as_mut_ptr(), pcm.len(), &mut written),
+                0
+            );
+            assert_eq!(written, 12000);
+            assert!(pcm[9600..12000].iter().all(|sample| *sample == 0.0));
+            assert_eq!(pcm[12000], 2.0);
+            assert_eq!(
+                (api.generator_render)(handle, std::ptr::null_mut(), 0, &mut written),
+                0
+            );
+            assert_eq!(written, 0);
+            assert_eq!(
+                (api.generator_render)(handle, std::ptr::null_mut(), 1, &mut written),
+                -1
+            );
+            assert_eq!(
+                (api.generator_render)(handle, pcm.as_mut_ptr(), 1, std::ptr::null_mut()),
+                -1
+            );
+            (api.generator_destroy)(handle);
+        }
+    }
+    unsafe {
+        let mut handle = std::ptr::dangling_mut();
+        for (digit, duration, gap, level) in [
+            (b'X', 200, 50, -12),
+            (b'1', 0, 50, -12),
+            (b'1', 200, 0, -12),
+            (b'1', 200, 50, 244),
+        ] {
+            assert_eq!(
+                (api.generator_create)(digit, duration, gap, level, &mut handle),
+                -1
+            );
+            assert!(handle.is_null());
+        }
+        assert_eq!(
+            (api.generator_create)(b'1', 200, 50, -12, std::ptr::null_mut()),
+            -1
+        );
+        let mut written = 99;
+        assert_eq!(
+            (api.generator_render)(std::ptr::null_mut(), std::ptr::null_mut(), 0, &mut written),
+            -1
+        );
+        assert_eq!(written, 0);
+        (api.generator_destroy)(std::ptr::null_mut());
+    }
+}
+
 const FRAME: usize = 612;
 
 extern "C" fn capture(context: *mut c_void, digit: u8) {
