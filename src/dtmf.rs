@@ -1,4 +1,4 @@
-//! Fixed-state 48 kHz DTMF detection.
+//! Fixed-state DTMF detection at native 48 kHz or narrowband 8 kHz, without resampling.
 
 const INTERVAL_SAMPLES: usize = 612;
 const ROWS: [f32; 4] = [697.0, 770.0, 852.0, 941.0];
@@ -90,18 +90,32 @@ pub struct DtmfDetector {
     misses: u8,
     muting: bool,
     suppressing: bool,
+    interval: usize,
+    minimum_power: f64,
+    energy_ratio: f64,
 }
 
 impl DtmfDetector {
     /// Construct a detector, selecting whether qualified DTMF audio is muted.
     #[must_use]
     pub fn new(muting: bool) -> Self {
+        Self::at_rate(muting, 48_000).expect("supported native rate")
+    }
+
+    /// Open an 8 kHz or 48 kHz source-rate detector. Other rates are rejected.
+    /// Analysis and qualification retain their 12.75 ms real-time intervals.
+    pub fn at_rate(muting: bool, rate: u32) -> Option<Self> {
+        if !matches!(rate, 8000 | 48000) {
+            return None;
+        }
+        let scale = f64::from(rate) / 48_000.0;
         let frequencies = [
             ROWS[0], ROWS[1], ROWS[2], ROWS[3], COLUMNS[0], COLUMNS[1], COLUMNS[2], COLUMNS[3],
         ];
-        Self {
+        Some(Self {
             filters: frequencies.map(|frequency| Filter {
-                coefficient: 2.0 * (core::f64::consts::TAU * f64::from(frequency) / 48_000.0).cos(),
+                coefficient: 2.0
+                    * (core::f64::consts::TAU * f64::from(frequency) / f64::from(rate)).cos(),
                 previous: 0.0,
                 before: 0.0,
             }),
@@ -113,7 +127,14 @@ impl DtmfDetector {
             misses: 0,
             muting,
             suppressing: false,
-        }
+            interval: if rate == 8000 {
+                INTERVAL_SAMPLES / 6
+            } else {
+                INTERVAL_SAMPLES
+            },
+            minimum_power: MINIMUM_POWER * scale * scale,
+            energy_ratio: TOTAL_ENERGY_RATIO * scale,
+        })
     }
 
     /// Select whether qualified DTMF audio is muted.
@@ -137,7 +158,22 @@ impl DtmfDetector {
     /// later completion audio is never muted. Carrier loss completes the qualified
     /// digit immediately, before the caller publishes its unkey command terminator.
     pub fn process(&mut self, receiving: bool, audio: &mut [f32], mut emit: impl FnMut(DtmfDigit)) {
-        self.process_inner(receiving, audio, &mut emit);
+        self.process_inner(receiving, audio, &mut emit, &mut |_, _| {});
+    }
+
+    /// Process PCM and report intentional mute intervals relative to this partition's start.
+    /// Negative starts include up to two analysis intervals of qualification lookback.
+    /// Callers publish these intervals before PCM, retaining tags until delayed audio drains.
+    /// Callbacks borrow only this call; neither may allocate, lock, block or perform I/O
+    /// on an audio worker. Inline muting and digit-completion behavior match `process`.
+    pub fn process_spans(
+        &mut self,
+        receiving: bool,
+        audio: &mut [f32],
+        mut emit: impl FnMut(DtmfDigit),
+        mut mute: impl FnMut(i64, i64),
+    ) {
+        self.process_inner(receiving, audio, &mut emit, &mut mute);
     }
 
     fn process_inner(
@@ -145,6 +181,7 @@ impl DtmfDetector {
         receiving: bool,
         audio: &mut [f32],
         emit: &mut dyn FnMut(DtmfDigit),
+        mute: &mut dyn FnMut(i64, i64),
     ) {
         if !receiving {
             if let Some(digit) = self.active.take() {
@@ -157,7 +194,8 @@ impl DtmfDetector {
             self.reset_interval();
             return;
         }
-        for sample in &mut *audio {
+        let mut mute_start = self.suppressing().then_some(0_i64);
+        for (offset, sample) in audio.iter_mut().enumerate() {
             let input = f64::from(*sample);
             if self.muting && self.suppressing {
                 *sample = 0.0;
@@ -169,11 +207,20 @@ impl DtmfDetector {
                 filter.previous = current;
             }
             self.samples += 1;
-            if self.samples == INTERVAL_SAMPLES {
+            if self.samples == self.interval {
                 if let Some(digit) = self.finish_interval() {
                     emit(digit);
                 }
+                let end = offset as i64 + 1;
+                if self.suppressing() {
+                    mute_start.get_or_insert(end - 2 * self.interval as i64);
+                } else if let Some(start) = mute_start.take() {
+                    mute(start, end);
+                }
             }
+        }
+        if let Some(start) = mute_start {
+            mute(start, audio.len() as i64);
         }
     }
 
@@ -226,11 +273,11 @@ impl DtmfDetector {
         let column = 4 + strongest(&powers[4..]);
         let row_power = powers[row];
         let column_power = powers[column];
-        let valid = row_power >= MINIMUM_POWER
-            && column_power >= MINIMUM_POWER
+        let valid = row_power >= self.minimum_power
+            && column_power >= self.minimum_power
             && column_power < row_power * REVERSE_TWIST
             && row_power < column_power * NORMAL_TWIST
-            && row_power + column_power > TOTAL_ENERGY_RATIO * self.energy
+            && row_power + column_power > self.energy_ratio * self.energy
             && powers[..4]
                 .iter()
                 .enumerate()
