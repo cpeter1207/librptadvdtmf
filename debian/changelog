@@ -1,3 +1,10 @@
+librptadvdtmf (0.1.0~alpha3-1) unstable; urgency=medium
+
+  * Release source-rate detection and delayed mute spans for EchoLink.
+  * Preserve the ABI 1 detector/generator prefix and SONAME.
+
+ -- Chris Peterson <cpeter1207@users.noreply.github.com>  Mon, 02 Nov 2026 20:31:07 +0000
+
 librptadvdtmf (0.1.0~alpha2-1) unstable; urgency=medium
 
   * Append finite DTMF generation through the dynamic tone provider.
