@@ -45,6 +45,17 @@ pub struct DtmfDescriptor {
     generator_render:
         unsafe extern "C" fn(*mut DtmfGeneratorHandle, *mut f32, usize, *mut usize) -> i32,
     generator_destroy: unsafe extern "C" fn(*mut DtmfGeneratorHandle),
+    create_at_rate: unsafe extern "C" fn(u32, u32, *mut *mut DtmfHandle) -> i32,
+    process_spans: unsafe extern "C" fn(
+        *mut DtmfHandle,
+        u32,
+        *mut f32,
+        u32,
+        Option<extern "C" fn(*mut c_void, u8)>,
+        *mut c_void,
+        Option<extern "C" fn(*mut c_void, i64, i64)>,
+        *mut c_void,
+    ),
 }
 
 // SAFETY: the descriptor and every address it references are immutable.
@@ -62,6 +73,8 @@ static DESCRIPTOR: DtmfDescriptor = DtmfDescriptor {
     generator_create,
     generator_render,
     generator_destroy,
+    create_at_rate,
+    process_spans,
 };
 
 /// Return the immutable ABI 1 function table.
@@ -71,10 +84,18 @@ pub extern "C" fn rptadv_dtmf_descriptor() -> *const DtmfDescriptor {
 }
 
 unsafe extern "C" fn create(muting: u32, out: *mut *mut DtmfHandle) -> i32 {
+    unsafe { create_at_rate(muting, 48_000, out) }
+}
+
+unsafe extern "C" fn create_at_rate(muting: u32, rate: u32, out: *mut *mut DtmfHandle) -> i32 {
     let Some(out) = (unsafe { out.as_mut() }) else {
         return -1;
     };
-    *out = Box::into_raw(Box::new(DtmfHandle(DtmfDetector::new(muting != 0))));
+    *out = std::ptr::null_mut();
+    let Some(detector) = DtmfDetector::at_rate(muting != 0, rate) else {
+        return -1;
+    };
+    *out = Box::into_raw(Box::new(DtmfHandle(detector)));
     0
 }
 
@@ -105,6 +126,30 @@ unsafe extern "C" fn process(
     emit: Option<extern "C" fn(*mut c_void, u8)>,
     context: *mut c_void,
 ) {
+    unsafe {
+        process_spans(
+            handle,
+            receiving,
+            audio,
+            count,
+            emit,
+            context,
+            None,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
+unsafe extern "C" fn process_spans(
+    handle: *mut DtmfHandle,
+    receiving: u32,
+    audio: *mut f32,
+    count: u32,
+    emit: Option<extern "C" fn(*mut c_void, u8)>,
+    context: *mut c_void,
+    mute: Option<extern "C" fn(*mut c_void, i64, i64)>,
+    mute_context: *mut c_void,
+) {
     // SAFETY: the caller holds this handle exclusively and supplies a writable
     // count-sized span. A zero-length carrier-loss call may use a null pointer.
     let Some(state) = (unsafe { handle.as_mut() }) else {
@@ -119,11 +164,20 @@ unsafe extern "C" fn process(
         // SAFETY: the non-null pointer names count writable f32 samples.
         unsafe { std::slice::from_raw_parts_mut(audio, count as usize) }
     };
-    state.0.process(receiving != 0, samples, |digit| {
-        if let Some(callback) = emit {
-            callback(context, ascii(digit));
-        }
-    });
+    state.0.process_spans(
+        receiving != 0,
+        samples,
+        |digit| {
+            if let Some(callback) = emit {
+                callback(context, ascii(digit));
+            }
+        },
+        |start, end| {
+            if let Some(callback) = mute {
+                callback(mute_context, start, end);
+            }
+        },
+    );
 }
 
 fn ascii(digit: DtmfDigit) -> u8 {

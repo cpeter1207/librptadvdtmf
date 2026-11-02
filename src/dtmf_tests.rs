@@ -4,6 +4,113 @@ const RATE: f32 = 48_000.0;
 const FRAME: usize = 612;
 
 #[test]
+fn source_rate_detection_and_span_lookback_are_partition_equivalent() {
+    use DtmfDigit::*;
+    for rate in [8000, 48000] {
+        let interval = rate as usize * 51 / 4000;
+        for digit in [
+            One, Two, Three, A, Four, Five, Six, B, Seven, Eight, Nine, C, Star, Zero, Hash, D,
+        ] {
+            let (row, column) = digit.frequencies();
+            let mut source: Vec<_> = (0..interval * 8)
+                .map(|i| {
+                    if i >= interval * 5 {
+                        0.0
+                    } else {
+                        let phase = std::f32::consts::TAU * i as f32 / rate as f32;
+                        0.2 * ((phase * row).sin() + (phase * column).sin())
+                    }
+                })
+                .collect();
+            let mut baseline = None;
+            for partition in [1, 37, interval, source.len()] {
+                let mut detector = DtmfDetector::at_rate(true, rate).unwrap();
+                let mut digits = Vec::new();
+                let mut mask = vec![false; source.len()];
+                let mut position = 0usize;
+                let mut pcm = source.clone();
+                for block in pcm.chunks_mut(partition) {
+                    detector.process_spans(
+                        true,
+                        block,
+                        |value| digits.push(value),
+                        |start, end| {
+                            let start = (position as i64 + start).max(0) as usize;
+                            let end = (position as i64 + end).max(0) as usize;
+                            assert!(end <= mask.len() && end >= start);
+                            mask[start..end].fill(true);
+                        },
+                    );
+                    position += block.len();
+                }
+                assert_eq!(
+                    digits,
+                    [digit],
+                    "rate={rate}, digit={digit:?}, partition={partition}"
+                );
+                assert!(
+                    mask[..interval * 5].iter().all(|sample| *sample),
+                    "qualifying prefix must be tagged"
+                );
+                assert!(mask[interval * 6..].iter().all(|sample| !*sample));
+                if let Some(expected) = &baseline {
+                    assert_eq!(&mask, expected);
+                } else {
+                    baseline = Some(mask);
+                }
+            }
+            source.clear();
+        }
+    }
+    for rate in [0, 16000, 44100, 96000] {
+        assert!(DtmfDetector::at_rate(true, rate).is_none());
+    }
+}
+
+#[test]
+fn source_rate_detector_rejects_noise_and_twist_and_finishes_on_carrier_loss() {
+    for rate in [8000, 48000] {
+        let interval = rate as usize * 51 / 4000;
+        for (row, column) in [(0.0, 0.0), (0.4, 0.02), (0.02, 0.4)] {
+            let mut detector = DtmfDetector::at_rate(true, rate).unwrap();
+            let mut pcm: Vec<_> = (0..interval * 8)
+                .map(|i| {
+                    let phase = std::f32::consts::TAU * i as f32 / rate as f32;
+                    row * (phase * 697.0).sin() + column * (phase * 1209.0).sin()
+                })
+                .collect();
+            let mut digits = Vec::new();
+            detector.process_spans(
+                true,
+                &mut pcm,
+                |digit| digits.push(digit),
+                |_, _| panic!("invalid tone muted"),
+            );
+            assert!(digits.is_empty());
+        }
+        let mut detector = DtmfDetector::at_rate(false, rate).unwrap();
+        let mut pcm: Vec<_> = (0..interval * 3)
+            .map(|i| {
+                let phase = std::f32::consts::TAU * i as f32 / rate as f32;
+                0.2 * ((phase * 697.0).sin() + (phase * 1209.0).sin())
+            })
+            .collect();
+        let original = pcm.clone();
+        let mut digits = Vec::new();
+        detector.process_spans(
+            true,
+            &mut pcm,
+            |digit| digits.push(digit),
+            |_, _| panic!("muting disabled"),
+        );
+        detector.process_spans(false, &mut [], |digit| digits.push(digit), |_, _| {});
+        assert_eq!(digits, [DtmfDigit::One]);
+        assert_eq!(pcm, original);
+        assert!(!detector.suppressing());
+    }
+}
+
+#[test]
 fn sustained_digit_restarts_release_qualification_after_one_short_gap() {
     let mut detector = DtmfDetector::new(false);
     let mut digits = Vec::new();

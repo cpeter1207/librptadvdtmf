@@ -1,6 +1,84 @@
 use super::*;
 
 #[test]
+fn rate_and_mute_span_descriptor_tail_preserves_old_prefix_and_validates_arguments() {
+    extern "C" fn spans(context: *mut c_void, start: i64, end: i64) {
+        unsafe { &mut *context.cast::<Vec<(i64, i64)>>() }.push((start, end));
+    }
+    let api = unsafe { &*rptadv_dtmf_descriptor() };
+    assert!(
+        std::mem::offset_of!(DtmfDescriptor, create_at_rate)
+            > std::mem::offset_of!(DtmfDescriptor, generator_destroy)
+    );
+    assert_eq!(api.struct_size as usize, size_of::<DtmfDescriptor>());
+    for rate in [8000, 48000] {
+        let mut handle = std::ptr::null_mut();
+        assert_eq!(unsafe { (api.create_at_rate)(1, rate, &mut handle) }, 0);
+        let interval = rate as usize * 51 / 4000;
+        let mut pcm: Vec<_> = (0..interval * 3)
+            .map(|i| {
+                let phase = std::f32::consts::TAU * i as f32 / rate as f32;
+                0.2 * ((phase * 697.0).sin() + (phase * 1209.0).sin())
+            })
+            .collect();
+        let mut muted = Vec::<(i64, i64)>::new();
+        let mut digits = Vec::<u8>::new();
+        unsafe {
+            (api.process_spans)(
+                handle,
+                1,
+                pcm.as_mut_ptr(),
+                pcm.len() as u32,
+                None,
+                std::ptr::null_mut(),
+                Some(spans),
+                (&mut muted as *mut Vec<(i64, i64)>).cast(),
+            );
+            (api.process_spans)(
+                handle,
+                0,
+                std::ptr::null_mut(),
+                0,
+                Some(capture),
+                (&mut digits as *mut Vec<u8>).cast(),
+                None,
+                std::ptr::null_mut(),
+            );
+            (api.process_spans)(
+                std::ptr::null_mut(),
+                1,
+                std::ptr::null_mut(),
+                1,
+                None,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+            );
+            (api.process_spans)(
+                handle,
+                1,
+                std::ptr::null_mut(),
+                1,
+                None,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+            );
+            (api.destroy)(handle);
+        }
+        assert_eq!(muted, [(0, (interval * 3) as i64)]);
+        assert_eq!(digits, [b'1']);
+    }
+    let mut handle = std::ptr::dangling_mut();
+    assert_eq!(unsafe { (api.create_at_rate)(1, 44100, &mut handle) }, -1);
+    assert!(handle.is_null());
+    assert_eq!(
+        unsafe { (api.create_at_rate)(1, 8000, std::ptr::null_mut()) },
+        -1
+    );
+}
+
+#[test]
 fn generator_descriptor_renders_ascii_and_rejects_invalid_arguments() {
     let api = unsafe { &*rptadv_dtmf_descriptor() };
     for digit in b"123A456B789C*0#D" {
