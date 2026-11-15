@@ -11,7 +11,7 @@ fn rate_and_mute_span_descriptor_tail_preserves_old_prefix_and_validates_argumen
             > std::mem::offset_of!(DtmfDescriptor, generator_destroy)
     );
     assert_eq!(api.struct_size as usize, size_of::<DtmfDescriptor>());
-    for rate in [8000, 48000] {
+    for rate in [8000, 16000, 48000] {
         let mut handle = std::ptr::null_mut();
         assert_eq!(unsafe { (api.create_at_rate)(1, rate, &mut handle) }, 0);
         let interval = rate as usize * 51 / 4000;

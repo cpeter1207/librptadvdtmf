@@ -6,7 +6,7 @@ const FRAME: usize = 612;
 #[test]
 fn source_rate_detection_and_span_lookback_are_partition_equivalent() {
     use DtmfDigit::*;
-    for rate in [8000, 48000] {
+    for rate in [8000, 16000, 48000] {
         let interval = rate as usize * 51 / 4000;
         for digit in [
             One, Two, Three, A, Four, Five, Six, B, Seven, Eight, Nine, C, Star, Zero, Hash, D,
@@ -18,7 +18,7 @@ fn source_rate_detection_and_span_lookback_are_partition_equivalent() {
                         0.0
                     } else {
                         let phase = std::f32::consts::TAU * i as f32 / rate as f32;
-                        0.2 * ((phase * row).sin() + (phase * column).sin())
+                        0.031 * ((phase * row).sin() + (phase * column).sin())
                     }
                 })
                 .collect();
@@ -54,22 +54,22 @@ fn source_rate_detection_and_span_lookback_are_partition_equivalent() {
                 );
                 assert!(mask[interval * 6..].iter().all(|sample| !*sample));
                 if let Some(expected) = &baseline {
-                    assert_eq!(&mask, expected);
+                    assert_eq!(&(mask, pcm), expected);
                 } else {
-                    baseline = Some(mask);
+                    baseline = Some((mask, pcm));
                 }
             }
             source.clear();
         }
     }
-    for rate in [0, 16000, 44100, 96000] {
+    for rate in [0, 12000, 44100, 96000] {
         assert!(DtmfDetector::at_rate(true, rate).is_none());
     }
 }
 
 #[test]
 fn source_rate_detector_rejects_noise_and_twist_and_finishes_on_carrier_loss() {
-    for rate in [8000, 48000] {
+    for rate in [8000, 16000, 48000] {
         let interval = rate as usize * 51 / 4000;
         for (row, column) in [(0.0, 0.0), (0.4, 0.02), (0.02, 0.4)] {
             let mut detector = DtmfDetector::at_rate(true, rate).unwrap();
@@ -342,4 +342,79 @@ fn dtmf_partitioning_preserves_detection_and_carrier_loss_finishes_digit() {
         detector.process(false, chunk, |digit| digits.push(digit));
     }
     assert_eq!(digits, [DtmfDigit::D]);
+}
+
+#[test]
+fn source_rates_preserve_analysis_duration_and_power_thresholds() {
+    for (rate, interval) in [(8000, 102), (16000, 204), (48000, 612)] {
+        let mut detector = DtmfDetector::at_rate(true, rate).unwrap();
+        assert_eq!(detector.interval, interval);
+        let scale = f64::from(rate) / 48_000.0;
+        assert_eq!(detector.minimum_power, super::MINIMUM_POWER * scale * scale);
+        assert_eq!(detector.energy_ratio, super::TOTAL_ENERGY_RATIO * scale);
+        let mut samples: Vec<_> = (0..interval * 2)
+            .map(|i| {
+                let phase = std::f32::consts::TAU * i as f32 / rate as f32;
+                0.2 * ((phase * 697.0).sin() + (phase * 1209.0).sin())
+            })
+            .collect();
+        let (prefix, last) = samples.split_at_mut(interval * 2 - 1);
+        detector.process(true, prefix, |_| panic!("early completion"));
+        assert!(!detector.suppressing());
+        detector.process_spans(
+            true,
+            last,
+            |_| panic!("early completion"),
+            |start, end| assert_eq!((start, end), (1 - 2 * interval as i64, 1)),
+        );
+        assert!(detector.suppressing());
+    }
+}
+
+#[test]
+fn source_rates_reject_subthreshold_tones_single_frequencies_and_broadband_noise() {
+    for rate in [8000, 16000, 48000] {
+        let interval = rate as usize * 51 / 4000;
+        for components in [
+            [(697.0, 0.001), (1209.0, 0.001)],
+            [(697.0, 0.2), (1209.0, 0.0)],
+            [(697.0, 0.0), (1209.0, 0.2)],
+            [(350.0, 0.2), (440.0, 0.2)],
+        ] {
+            let mut detector = DtmfDetector::at_rate(true, rate).unwrap();
+            let mut pcm: Vec<_> = (0..interval * 8)
+                .map(|i| {
+                    let phase = std::f32::consts::TAU * i as f32 / rate as f32;
+                    components
+                        .iter()
+                        .map(|(frequency, amplitude)| amplitude * (phase * frequency).sin())
+                        .sum()
+                })
+                .collect();
+            detector.process_spans(
+                true,
+                &mut pcm,
+                |_| panic!("invalid tone detected at {rate}"),
+                |_, _| panic!("invalid tone muted at {rate}"),
+            );
+            detector.process(false, &mut [], |_| panic!("invalid tone completed"));
+        }
+        let mut detector = DtmfDetector::at_rate(true, rate).unwrap();
+        let mut random = 1_u32;
+        let mut block = [0.0; 37];
+        // Ten seconds, fixed storage and deterministic broadband input.
+        for _ in 0..rate * 10 / 37 {
+            for sample in &mut block {
+                random = random.wrapping_mul(1664525).wrapping_add(1013904223);
+                *sample = (random as f64 / u32::MAX as f64 - 0.5) as f32 * 0.5;
+            }
+            detector.process_spans(
+                true,
+                &mut block,
+                |_| panic!("noise detected at {rate}"),
+                |_, _| panic!("noise muted at {rate}"),
+            );
+        }
+        detector.process(false, &mut [], |_| panic!("noise completed"));
+    }
 }

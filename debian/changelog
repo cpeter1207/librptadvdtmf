@@ -1,3 +1,10 @@
+librptadvdtmf (0.1.0~alpha4-1) unstable; urgency=medium
+
+  * Add native 16 kHz detection with source-rate mute coordinates.
+  * Preserve the ABI 1 detector/generator descriptor and SONAME.
+
+ -- codex <codex@localhost>  Sun, 15 Nov 2026 16:28:50 +0000
+
 librptadvdtmf (0.1.0~alpha3-1) unstable; urgency=medium
 
   * Release source-rate detection and delayed mute spans for EchoLink.
