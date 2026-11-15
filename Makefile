@@ -14,7 +14,7 @@ PKG_CONFIG ?= pkg-config
 
 PACKAGE := librptadvdtmf
 CRATE := rptadvdtmf
-PACKAGE_VERSION ?= 0.1.0-alpha.3
+PACKAGE_VERSION ?= 0.1.0-alpha.4
 SOVERSION := 1
 PREFIX ?= /usr/local
 DESTDIR ?=

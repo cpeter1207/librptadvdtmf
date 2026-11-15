@@ -12,7 +12,7 @@ Architecture: any
 Multi-Arch: same
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Description: portable DTMF state for rpt_advanced
- Versioned 48 kHz DTMF detection and finite PCM generation ABI.
+ Versioned 8, 16 and 48 kHz DTMF detection and finite 48 kHz PCM generation ABI.
 
 Package: librptadvdtmf-dev
 Architecture: any
