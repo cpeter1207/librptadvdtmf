@@ -13,7 +13,7 @@ extern "C" {
 
 #define RPTADV_DTMF_ABI_VERSION 1U /**< Initial DTMF descriptor ABI. */
 
-/** @brief Opaque state for one 8 kHz or 48 kHz receive stream. */
+/** @brief Opaque state for one 8, 16 or 48 kHz receive stream. */
 struct rptadv_dtmf;
 /** @brief Owned finite tone and following silence; create and destroy off
  * audio. */
@@ -51,7 +51,7 @@ struct rptadv_dtmf_descriptor {
   void (*set_muting)(struct rptadv_dtmf *handle, uint32_t enabled);
   /** @brief Return 1 when a qualified tone is muted, otherwise 0. */
   uint32_t (*suppressing)(const struct rptadv_dtmf *handle);
-  /** @brief Consume and optionally mute one arbitrary 48 kHz mono F32
+  /** @brief Consume and optionally mute one arbitrary source-rate mono F32
    * partition.
    * @param handle Exclusive detector state for this call.
    * @param receiving Zero completes a qualified digit and resets state, even
@@ -98,7 +98,7 @@ struct rptadv_dtmf_descriptor {
   /** @brief Allocate a source-rate detector without resampling.
    * @param muting Zero disables muting and mute intervals; nonzero enables
    * them.
-   * @param sample_rate_hz Exactly 8000 or 48000; fixed for this handle's
+   * @param sample_rate_hz Exactly 8000, 16000 or 48000; fixed for this handle's
    * lifetime.
    * @param out Receives the owned handle; cleared on failure.
    * @return Zero on success, -1 for invalid rate or null output.

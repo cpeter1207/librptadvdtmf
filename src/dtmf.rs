@@ -1,4 +1,4 @@
-//! Fixed-state DTMF detection at native 48 kHz or narrowband 8 kHz, without resampling.
+//! Fixed-state DTMF detection at 8, 16 or 48 kHz, without resampling.
 
 const INTERVAL_SAMPLES: usize = 612;
 const ROWS: [f32; 4] = [697.0, 770.0, 852.0, 941.0];
@@ -79,7 +79,7 @@ struct Filter {
     before: f64,
 }
 
-/// Fixed-storage DTMF detector for canonical 48 kHz PCM.
+/// Fixed-storage DTMF detector for supported source-rate PCM.
 pub struct DtmfDetector {
     filters: [Filter; 8],
     samples: usize,
@@ -102,10 +102,10 @@ impl DtmfDetector {
         Self::at_rate(muting, 48_000).expect("supported native rate")
     }
 
-    /// Open an 8 kHz or 48 kHz source-rate detector. Other rates are rejected.
+    /// Open an 8, 16 or 48 kHz source-rate detector. Other rates are rejected.
     /// Analysis and qualification retain their 12.75 ms real-time intervals.
     pub fn at_rate(muting: bool, rate: u32) -> Option<Self> {
-        if !matches!(rate, 8000 | 48000) {
+        if !matches!(rate, 8000 | 16000 | 48000) {
             return None;
         }
         let scale = f64::from(rate) / 48_000.0;
@@ -127,11 +127,8 @@ impl DtmfDetector {
             misses: 0,
             muting,
             suppressing: false,
-            interval: if rate == 8000 {
-                INTERVAL_SAMPLES / 6
-            } else {
-                INTERVAL_SAMPLES
-            },
+            // All supported rates preserve exactly 12.75 ms per analysis interval.
+            interval: INTERVAL_SAMPLES * rate as usize / 48_000,
             minimum_power: MINIMUM_POWER * scale * scale,
             energy_ratio: TOTAL_ENERGY_RATIO * scale,
         })
@@ -154,7 +151,7 @@ impl DtmfDetector {
     /// must remain allocation-free, lock-free and nonblocking on an audio worker.
     /// Muting starts after two matching analysis intervals qualify a digit and ends
     /// after the first unlike interval. It adds no lookback delay, so the qualifying
-    /// prefix can pass and at most 612 post-tone samples (12.75 ms) can be silenced;
+    /// prefix can pass and at most one source-rate interval (12.75 ms) can be silenced;
     /// later completion audio is never muted. Carrier loss completes the qualified
     /// digit immediately, before the caller publishes its unkey command terminator.
     pub fn process(&mut self, receiving: bool, audio: &mut [f32], mut emit: impl FnMut(DtmfDigit)) {
